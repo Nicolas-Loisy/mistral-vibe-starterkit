@@ -21,6 +21,10 @@ class HelloChatWorkflow(workflows.InteractiveWorkflow):
 
         greeting = await greet(name)
 
+        # The return value is a structured payload for interop, not a chat
+        # message: it must be sent explicitly to actually appear in the chat.
+        await workflows_mistralai.send_assistant_message(greeting)
+
         return workflows_mistralai.ChatAssistantWorkflowOutput(
             content=[workflows_mistralai.TextOutput(text=greeting)]
         )

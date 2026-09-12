@@ -83,6 +83,27 @@ Studio. `hello_chat.py` (dans `src/workflows/hello_chat.py`) est la version
 conversationnelle : elle remplit la condition n°1 (éligible à Vibe), mais
 n'a pas encore été publiée dans un workspace (condition n°2).
 
+### Piège rencontré : le `return` n'affiche rien dans le chat
+
+En testant `hello-chat` dans la console : la question s'affichait bien, la
+réponse de l'utilisateur était bien reçue, l'exécution se terminait avec le
+bon résultat visible dans l'onglet Executions — mais **rien ne s'affichait
+dans le chat** après l'input.
+
+Cause : la valeur retournée par `run()` (le `ChatAssistantWorkflowOutput` du
+`return`) n'est **pas** un message de chat. C'est un payload structuré pour
+l'interopérabilité (utilisé par exemple par Vibe pour lire le résultat),
+mais aucune surface de chat ne l'affiche automatiquement comme une bulle de
+conversation. Seuls les appels explicites à `send_assistant_message()`
+produisent un message visible.
+
+Correction dans `hello_chat.py` : appeler `send_assistant_message(greeting)`
+juste avant le `return`, en gardant le `return` pour clore le workflow
+proprement. Retenir la règle générale : dans un workflow conversationnel,
+tout ce qui doit apparaître à l'écran doit passer par
+`send_assistant_message()` explicitement, le `return` final ne sert qu'à
+terminer le workflow et transporter la donnée structurée.
+
 ## Architecture hybride
 
 Mistral héberge l'**orchestrateur** : l'état des workflows, l'historique
