@@ -14,7 +14,7 @@ avec le reste de l'écosystème Mistral Vibe), voir
 |---|---|---|
 | Python | 3.12+ | OK (Python 3.12.2) |
 | uv / uvx | dernière version | Installé le 2026-09-12 |
-| Compte Mistral + clé API | — | À faire (voir étape 2) |
+| Compte Mistral + clé API | — | OK — clé générée, stockée dans `.env` (non versionné) |
 
 ## Étape 1 — Installer `uv` (fait)
 
@@ -41,12 +41,12 @@ uv --version
 uvx --version
 ```
 
-## Étape 2 — Créer une clé API Mistral (à faire)
+## Étape 2 — Créer une clé API Mistral (fait)
 
 1. Va sur [console.mistral.ai/api-keys](https://console.mistral.ai/api-keys)
    (crée un compte si tu n'en as pas encore).
 2. Génère une nouvelle clé API.
-3. Garde-la de côté, on l'utilisera à l'étape 4 — **ne la colle jamais dans
+3. Garde-la de côté, on l'utilisera à l'étape 3 — **ne la colle jamais dans
    une conversation ou un fichier versionné**. Deux options pour la stocker
    localement une fois générée :
    - la définir pour la session courante :
@@ -59,22 +59,9 @@ uvx --version
      ```
      (nécessite un nouveau terminal pour être prise en compte)
 
-## Étape 3 — Créer un environnement virtuel (`.venv`)
+## Étape 3 — Scaffolder le projet Workflows (fait)
 
-Une fois dans un nouveau terminal avec `uv` disponible, à la racine du
-dépôt :
-
-```powershell
-uv venv
-```
-
-Cela crée un dossier `.venv/` (déjà ignoré par git, voir `.gitignore`). `uv`
-l'utilisera automatiquement pour les commandes `uv run` / `uv add` lancées
-depuis ce dossier.
-
-## Étape 4 — Scaffolder le projet Workflows (à faire, bloqué sur l'étape 2)
-
-Commande à lancer une fois la clé API disponible :
+Commande lancée à la racine du dépôt :
 
 ```powershell
 uvx mistralai-workflows-cli@latest setup --api-key $env:MISTRAL_API_KEY -o . -n mistral-vibe-starterkit
@@ -84,18 +71,24 @@ uvx mistralai-workflows-cli@latest setup --api-key $env:MISTRAL_API_KEY -o . -n 
 - `-n mistral-vibe-starterkit` : nom du projet.
 - Sans `--api-key`, la commande la demande de façon interactive.
 
-Cette commande génère une structure de projet prête à l'emploi :
+Cette commande crée elle-même l'environnement virtuel (`uv sync`) et génère
+la structure de projet :
 
 ```
 src/
-  workflows/
-    hello.py         # définition d'un workflow d'exemple
-  entrypoints/
-    worker.py         # point d'entrée du worker
-Makefile              # commandes utilitaires (start-worker, execute, ...)
+  entrypoints/     # worker.py, start.py, dev.py — points d'entrée exécutables
+  workflows/       # tes workflows (auto-découverts par le worker) — hello.py au départ
+  examples/        # cookbooks complets, non chargés par défaut
+.agents/skills/workflows/  # doc de référence du framework, pour un assistant IA
+Makefile           # commandes utilitaires (start-worker, execute, lint, ...)
+pyproject.toml / uv.lock
 ```
 
-## Étape 5 — Lancer le worker en local (à faire)
+Deux fichiers `worker.py` redondants générés par le scaffold (à la racine et
+dans `src/`, non référencés par le Makefile) ont été déplacés dans `local/`
+(dossier ignoré par git) plutôt que supprimés.
+
+## Étape 4 — Lancer le worker en local (fait)
 
 Depuis la racine du projet :
 
@@ -103,35 +96,45 @@ Depuis la racine du projet :
 make start-worker
 ```
 
-Cela démarre un worker local qui s'enregistre auprès de l'API Mistral et
-exécute les workflows/activities définis dans `src/`.
+Démarre un worker local (mode `entrypoints.dev`, avec rechargement
+automatique) qui découvre les workflows de `src/workflows/` et s'enregistre
+auprès de l'API Mistral.
 
-## Étape 6 — Déclencher une exécution (à faire)
+## Étape 5 — Déclencher une exécution (fait)
 
-Deux façons de tester le workflow d'exemple `hello-world` :
+Dans un second terminal, pendant que le worker tourne :
 
-- **Via la console Mistral** : console.mistral.ai → Workflows → `hello-world`
-  → *Start Workflow* avec `{"name": "TonPrénom"}`, puis consulter l'onglet
-  *Executions*.
-- **Via le terminal** (si la cible `execute` existe dans le `Makefile`
-  généré) :
-  ```powershell
-  make execute workflow=hello-world input='{"name": "TonPrénom"}'
-  ```
+```powershell
+make execute workflow=hello-world input='{"name": "TonPrenom"}'
+```
 
-Résultat attendu :
+Résultat obtenu :
 
 ```json
-{"result": "Hello, TonPrénom! Welcome to Mistral Workflows."}
+{"result": "Hello, TonPrenom! Welcome to Mistral Workflows."}
 ```
+
+Le workflow `hello-world` (défini dans `src/workflows/hello.py`) tourne donc
+de bout en bout : worker local ↔ API Mistral ↔ exécution ↔ résultat.
+
+## Et ensuite
+
+La boucle de base fonctionne. Les pistes possibles pour la suite :
+
+- écrire un premier workflow personnel (nouveau fichier dans
+  `src/workflows/`), en s'appuyant sur le skill
+  `.agents/skills/workflows/SKILL.md` et sur les exemples de
+  `src/examples/` ;
+- explorer un cookbook existant (`make start-examples`) ;
+- ajouter des tests (`tests/`, voir
+  `.agents/skills/workflows/references/guides/testing.md`).
 
 ## Où en est-on
 
 - [x] `uv` / `uvx` installés
-- [ ] Clé API Mistral générée
-- [ ] `.venv` créé
-- [ ] Projet Workflows scaffoldé
-- [ ] Worker lancé localement
-- [ ] Premier workflow exécuté avec succès
+- [x] Clé API Mistral générée
+- [x] Projet Workflows scaffoldé (`.venv` créé automatiquement par `uv sync`)
+- [x] Worker lancé localement
+- [x] Premier workflow (`hello-world`) exécuté avec succès
 
 Mets cette liste à jour au fur et à mesure des étapes réalisées.

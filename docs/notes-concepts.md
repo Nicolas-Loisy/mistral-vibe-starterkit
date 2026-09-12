@@ -58,6 +58,31 @@ serait une sur-ingénierie.
 | **Deployment** | La version déployée/enregistrée d'un ou plusieurs workflows, appelable depuis la plateforme. |
 | **Execution** | Une instance d'exécution d'un workflow donné, avec son propre historique et son propre état. |
 
+## Pourquoi un workflow n'apparaît pas automatiquement dans Vibe
+
+Constat pratique : après avoir exécuté `hello-world` avec succès (worker +
+`make execute`), il n'apparaît nulle part dans Vibe. Deux conditions
+distinctes s'additionnent, et `hello-world` ne remplit ni l'une ni l'autre :
+
+1. **Le workflow doit être "conversationnel"** : pour être exploitable dans
+   Vibe, un workflow doit hériter de `InteractiveWorkflow` et retourner un
+   `ChatAssistantWorkflowOutput` (type défini par le plugin Mistral). C'est
+   un contrat d'interface commun entre Studio et Vibe — un workflow qui
+   retourne un type "normal" (`str`, `dict`, modèle Pydantic quelconque)
+   comme `hello-world` n'est **pas éligible**, quel que soit son succès
+   d'exécution.
+2. **Même éligible, il doit être publié** : dans Vibe Work, les workflows
+   se trouvent dans le menu `+` du chat → "Workflows", mais seulement s'ils
+   ont été explicitement **publiés dans le workspace** par un développeur.
+   Faire tourner un worker en local et exécuter le workflow via `make
+   execute` ne publie rien — ce sont deux mécanismes séparés.
+
+`hello-world` (dans `src/workflows/hello.py`) reste utile pour tester la
+mécanique de base (worker ↔ exécution ↔ résultat), visible dans la console
+Studio. `hello_chat.py` (dans `src/workflows/hello_chat.py`) est la version
+conversationnelle : elle remplit la condition n°1 (éligible à Vibe), mais
+n'a pas encore été publiée dans un workspace (condition n°2).
+
 ## Architecture hybride
 
 Mistral héberge l'**orchestrateur** : l'état des workflows, l'historique
