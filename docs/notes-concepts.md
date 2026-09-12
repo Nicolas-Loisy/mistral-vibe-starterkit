@@ -104,6 +104,26 @@ tout ce qui doit apparaître à l'écran doit passer par
 `send_assistant_message()` explicitement, le `return` final ne sert qu'à
 terminer le workflow et transporter la donnée structurée.
 
+### Piège rencontré : les sous-dossiers de `src/workflows/` sont ignorés
+
+En construisant `rag_qa.py` (pipeline RAG), tentation naturelle : suivre le
+découpage `activities.py` / `models.py` / `workflow.py` utilisé dans
+`src/examples/*` (voir plus bas). Mais ce découpage n'est pas discoverable
+par défaut.
+
+Cause : `discover_workflows()` dans `src/entrypoints/worker.py` scanne
+`src/workflows/` avec `pkgutil.iter_modules(...)` et ignore explicitement
+tout sous-package (`if ispkg: continue`). `src/examples/` échappe à cette
+règle uniquement parce qu'il a son propre worker dédié
+(`src/examples/worker.py`) qui importe les workflows explicitement, sans
+passer par cette découverte automatique.
+
+Conséquence pratique : tant qu'on n'a pas modifié `discover_workflows()`
+pour qu'il parcoure aussi les sous-dossiers, chaque workflow personnel dans
+`src/workflows/` doit rester un **module plat** (un seul fichier `.py`,
+comme `hello.py` et `rag_qa.py`), même s'il regroupe plusieurs classes et
+activities dans ce même fichier.
+
 ## Architecture hybride
 
 Mistral héberge l'**orchestrateur** : l'état des workflows, l'historique

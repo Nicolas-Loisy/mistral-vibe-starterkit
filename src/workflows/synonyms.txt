@@ -1,0 +1,5 @@
+voiture;auto;automobile;véhicule
+ordinateur;pc;machine
+chat;chaton;félin
+chien;chiot;canin
+facture;invoice;note de frais
