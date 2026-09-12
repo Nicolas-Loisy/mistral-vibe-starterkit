@@ -14,4 +14,17 @@ __pycache__/
 # Divers OS/éditeurs
 .DS_Store
 Thumbs.db
-doc_mistral.xml
+
+# Fichiers hors perimetre strict du projet (recherche, doublons, brouillons)
+# deplaces ici plutot que supprimes
+local/
+
+dist/
+build/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
