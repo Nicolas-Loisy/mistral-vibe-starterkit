@@ -5,6 +5,7 @@ the default worker's auto-discovery (entrypoints/worker.py) only scans
 top-level modules directly under src/workflows/ and skips subpackages.
 """
 
+import re
 from datetime import timedelta
 from pathlib import Path
 
@@ -25,14 +26,6 @@ FORBIDDEN_TOPICS = [
 DEFAULT_FORBIDDEN_ANSWER = (
     "Je ne peux pas repondre a cette question : le sujet n'est pas autorise."
 )
-
-
-class RagQuestion(BaseModel):
-    question: str
-
-
-class RagAnswer(BaseModel):
-    answer: str
 
 
 class ForbiddenTopicCheck(BaseModel):
@@ -95,7 +88,9 @@ async def search(keywords: str) -> str:
     tool is available — the signature (keywords in, context text out) and
     the retry policy above are already set up for that transition.
     """
-    return f"[mock context for keywords: {keywords!r}] Lorem ipsum dolor sit amet."
+    return (
+        f"[mock context for keywords: {keywords!r}] Lorem ipsum dolor sit amet canin."
+    )
 
 
 @workflows.activity()
@@ -113,7 +108,14 @@ async def identify_synonyms(question: str, context: str) -> str:
         if not line:
             continue
         forms = [form.strip().lower() for form in line.split(";") if form.strip()]
-        if any(form in haystack for form in forms):
+        if any(
+            # Match a whole word / token, not just an embedded substring.
+            # (?<!\w) = previous char is not a word char, so we don't match
+            # inside larger words (e.g. "car" in "scar"), and (?!\w) does the
+            # same on the right. re.escape(form) keeps the synonym literal safe.
+            re.search(rf"(?<!\w){re.escape(form)}(?!\w)", haystack)
+            for form in forms
+        ):
             matched_lines.append(line)
     return "\n".join(matched_lines)
 
@@ -147,7 +149,7 @@ async def generate_answer(question: str, context: str, synonyms: str) -> str:
     # .content is typed as str | list[...chunk types...] to support multimodal
     # replies; a plain-text prompt like this one always yields a str.
     if not isinstance(content, str):
-        raise ValueError(f"Expected plain text answer, got: {type(content).__name__}")
+        raise TypeError(f"Expected plain text answer, got: {type(content).__name__}")
     return content
 
 
@@ -156,24 +158,46 @@ async def generate_answer(question: str, context: str, synonyms: str) -> str:
     workflow_display_name="RAG Q&A",
     workflow_description="Classic RAG pipeline: guardrail, rewrite, search, synonyms, answer.",
 )
-class RagQaWorkflow:
+class RagQaWorkflow(workflows.InteractiveWorkflow):
+    """Interactive so it can be published as a Vibe assistant.
+
+    No entrypoint parameters: the question comes from the chat itself via
+    wait_for_input(), same pattern as hello_chat.HelloChatWorkflow.
+    """
+
     @workflows.workflow.entrypoint
-    async def run(self, input: RagQuestion) -> RagAnswer:
+    async def run(self) -> workflows_mistralai.ChatAssistantWorkflowOutput:
+        await workflows_mistralai.send_assistant_message(
+            "Pose ta question, je vais chercher la reponse."
+        )
+        user_input = await self.wait_for_input(workflows_mistralai.ChatInput())
+        question = user_input.message[0].text if user_input.message else ""
+
         # Step 1 — guardrail. Branching on `forbidden.is_forbidden` is
         # deterministic: it comes from a recorded activity result.
-        forbidden = await check_forbidden_topic(input.question)
+        forbidden = await check_forbidden_topic(question)
         if forbidden.is_forbidden:
-            return RagAnswer(answer=DEFAULT_FORBIDDEN_ANSWER)
+            # The return value alone is never displayed in chat (see
+            # notes-concepts.md) — send_assistant_message() is what the
+            # user actually sees.
+            await workflows_mistralai.send_assistant_message(DEFAULT_FORBIDDEN_ANSWER)
+            return workflows_mistralai.ChatAssistantWorkflowOutput(
+                content=[workflows_mistralai.TextOutput(text=DEFAULT_FORBIDDEN_ANSWER)]
+            )
 
         # Step 2 — reformulate the question into search keywords.
-        rewritten = await rewrite_query(input.question)
+        rewritten = await rewrite_query(question)
 
         # Step 3 — retrieve context (mocked for now, see `search`).
         context = await search(rewritten.keywords)
 
         # Step 4 — pull in related vocabulary from the synonyms dictionary.
-        synonyms = await identify_synonyms(input.question, context)
+        synonyms = await identify_synonyms(question, context)
 
         # Step 5 — generate the final answer.
-        answer = await generate_answer(input.question, context, synonyms)
-        return RagAnswer(answer=answer)
+        answer = await generate_answer(question, context, synonyms)
+
+        await workflows_mistralai.send_assistant_message(answer)
+        return workflows_mistralai.ChatAssistantWorkflowOutput(
+            content=[workflows_mistralai.TextOutput(text=answer)]
+        )
