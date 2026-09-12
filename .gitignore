@@ -1,0 +1,17 @@
+# Instructions locales (jamais commitées)
+CLAUDE.md
+
+# Environnement Python
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Divers OS/éditeurs
+.DS_Store
+Thumbs.db
+doc_mistral.xml
