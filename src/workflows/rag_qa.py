@@ -37,7 +37,17 @@ class RewriteResult(BaseModel):
     keywords: str
 
 
-@workflows.activity()
+@workflows.activity(
+    retry_policy_max_attempts=5,
+    retry_policy_backoff_coefficient=2.0,
+    start_to_close_timeout=timedelta(seconds=30),
+    # All three LLM calls below share one pool (key="mistral_api") so their
+    # combined rate stays under the account's limit, not 3x it. Tune
+    # max_execution to your actual tier — this is a conservative default.
+    rate_limit=workflows.RateLimit(
+        time_window_in_sec=1, max_execution=1, key="mistral_api"
+    ),
+)
 async def check_forbidden_topic(question: str) -> ForbiddenTopicCheck:
     """Ask the LLM whether the question is about one of the forbidden topics."""
     topics = "\n".join(f"- {topic}" for topic in FORBIDDEN_TOPICS)
@@ -57,7 +67,14 @@ async def check_forbidden_topic(question: str) -> ForbiddenTopicCheck:
     return await workflows_mistralai.chat_parse_to_model(ForbiddenTopicCheck, request)
 
 
-@workflows.activity()
+@workflows.activity(
+    retry_policy_max_attempts=5,
+    retry_policy_backoff_coefficient=2.0,
+    start_to_close_timeout=timedelta(seconds=30),
+    rate_limit=workflows.RateLimit(
+        time_window_in_sec=1, max_execution=1, key="mistral_api"
+    ),
+)
 async def rewrite_query(question: str) -> RewriteResult:
     """Reformulate the question into a short list of search keywords."""
     request = workflows_mistralai.ChatCompletionRequest(
@@ -120,7 +137,14 @@ async def identify_synonyms(question: str, context: str) -> str:
     return "\n".join(matched_lines)
 
 
-@workflows.activity()
+@workflows.activity(
+    retry_policy_max_attempts=5,
+    retry_policy_backoff_coefficient=2.0,
+    start_to_close_timeout=timedelta(seconds=30),
+    rate_limit=workflows.RateLimit(
+        time_window_in_sec=1, max_execution=1, key="mistral_api"
+    ),
+)
 async def generate_answer(question: str, context: str, synonyms: str) -> str:
     """Produce the final answer from the retrieved context and synonyms list."""
     request = workflows_mistralai.ChatCompletionRequest(
