@@ -15,6 +15,11 @@ from pydantic import BaseModel
 
 SYNONYMS_PATH = Path(__file__).parent / "synonyms.txt"
 
+# mistral-small-latest hit the free tier's rate limit on every call; the
+# account's "1 req/s" cap appears to be enforced per-model, and this smaller
+# model has separate (workable) headroom.
+MODEL = "ministral-3b-2512"
+
 FORBIDDEN_TOPICS = [
     "armes et explosifs",
     "fabrication de drogues",
@@ -37,22 +42,12 @@ class RewriteResult(BaseModel):
     keywords: str
 
 
-@workflows.activity(
-    retry_policy_max_attempts=5,
-    retry_policy_backoff_coefficient=2.0,
-    start_to_close_timeout=timedelta(seconds=30),
-    # All three LLM calls below share one pool (key="mistral_api") so their
-    # combined rate stays under the account's limit, not 3x it. Tune
-    # max_execution to your actual tier — this is a conservative default.
-    rate_limit=workflows.RateLimit(
-        time_window_in_sec=1, max_execution=1, key="mistral_api"
-    ),
-)
+@workflows.activity()
 async def check_forbidden_topic(question: str) -> ForbiddenTopicCheck:
     """Ask the LLM whether the question is about one of the forbidden topics."""
     topics = "\n".join(f"- {topic}" for topic in FORBIDDEN_TOPICS)
     request = workflows_mistralai.ChatCompletionRequest(
-        model="mistral-small-latest",
+        model=MODEL,
         messages=[
             workflows_mistralai.SystemMessage(
                 content=(
@@ -67,18 +62,11 @@ async def check_forbidden_topic(question: str) -> ForbiddenTopicCheck:
     return await workflows_mistralai.chat_parse_to_model(ForbiddenTopicCheck, request)
 
 
-@workflows.activity(
-    retry_policy_max_attempts=5,
-    retry_policy_backoff_coefficient=2.0,
-    start_to_close_timeout=timedelta(seconds=30),
-    rate_limit=workflows.RateLimit(
-        time_window_in_sec=1, max_execution=1, key="mistral_api"
-    ),
-)
+@workflows.activity()
 async def rewrite_query(question: str) -> RewriteResult:
     """Reformulate the question into a short list of search keywords."""
     request = workflows_mistralai.ChatCompletionRequest(
-        model="mistral-small-latest",
+        model=MODEL,
         messages=[
             workflows_mistralai.SystemMessage(
                 content=(
@@ -137,18 +125,11 @@ async def identify_synonyms(question: str, context: str) -> str:
     return "\n".join(matched_lines)
 
 
-@workflows.activity(
-    retry_policy_max_attempts=5,
-    retry_policy_backoff_coefficient=2.0,
-    start_to_close_timeout=timedelta(seconds=30),
-    rate_limit=workflows.RateLimit(
-        time_window_in_sec=1, max_execution=1, key="mistral_api"
-    ),
-)
+@workflows.activity()
 async def generate_answer(question: str, context: str, synonyms: str) -> str:
     """Produce the final answer from the retrieved context and synonyms list."""
     request = workflows_mistralai.ChatCompletionRequest(
-        model="mistral-small-latest",
+        model=MODEL,
         messages=[
             workflows_mistralai.SystemMessage(
                 content=(

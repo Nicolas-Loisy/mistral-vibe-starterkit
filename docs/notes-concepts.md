@@ -124,6 +124,26 @@ pour qu'il parcoure aussi les sous-dossiers, chaque workflow personnel dans
 comme `hello.py` et `rag_qa.py`), même s'il regroupe plusieurs classes et
 activities dans ce même fichier.
 
+### Piège rencontré : le rate limit dépend du modèle, pas juste du compte
+
+En testant `rag_qa.py` avec `model="mistral-small-latest"`, chaque appel LLM
+échouait avec une erreur 429 (`rate_limited`), même après avoir ajouté du
+retry et un throttle interne (`rate_limit=`) volontairement en dessous du
+seuil affiché sur la console (1 req/s). Le throttle et les retries n'ont
+rien changé.
+
+Cause probable : le "1 req/s" affiché sur la page Usage and limits n'est pas
+un plafond global pour le compte, mais semble s'appliquer **par modèle**. En
+changeant simplement de modèle (`ministral-3b-2512` au lieu de
+`mistral-small-latest`), le problème a disparu immédiatement — sans aucun
+changement de retry/throttle.
+
+Leçon : face à un 429 persistant malgré du retry/throttle correctement
+configuré, tester avec un autre modèle avant de continuer à ajuster la
+politique de retry côté code — le goulot d'étranglement peut être le choix
+du modèle, pas la fréquence d'appel. Le nom du modèle est centralisé dans la
+constante `MODEL` en haut de `rag_qa.py` pour rendre ce genre de test rapide.
+
 ## Architecture hybride
 
 Mistral héberge l'**orchestrateur** : l'état des workflows, l'historique
