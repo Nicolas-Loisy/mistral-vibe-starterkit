@@ -166,17 +166,22 @@ async def generate_answer(question: str, context: str, synonyms: str) -> str:
 class RagQaWorkflow(workflows.InteractiveWorkflow):
     """Interactive so it can be published as a Vibe assistant.
 
-    No entrypoint parameters: the question comes from the chat itself via
-    wait_for_input(), same pattern as hello_chat.HelloChatWorkflow.
+    `question` is optional: when launched with a message already attached
+    (e.g. the user types their question when starting the workflow in
+    Vibe), that message fills this parameter directly and the chat
+    round-trip below is skipped. Only ask if it comes in empty.
     """
 
     @workflows.workflow.entrypoint
-    async def run(self) -> workflows_mistralai.ChatAssistantWorkflowOutput:
-        await workflows_mistralai.send_assistant_message(
-            "Pose ta question, je vais chercher la reponse."
-        )
-        user_input = await self.wait_for_input(workflows_mistralai.ChatInput())
-        question = user_input.message[0].text if user_input.message else ""
+    async def run(
+        self, question: str = ""
+    ) -> workflows_mistralai.ChatAssistantWorkflowOutput:
+        if not question:
+            await workflows_mistralai.send_assistant_message(
+                "Pose ta question, je vais chercher la reponse."
+            )
+            user_input = await self.wait_for_input(workflows_mistralai.ChatInput())
+            question = user_input.message[0].text if user_input.message else ""
 
         # Step 1 — guardrail. Branching on `forbidden.is_forbidden` is
         # deterministic: it comes from a recorded activity result.
