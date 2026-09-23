@@ -16,6 +16,8 @@ import mistralai.workflows.plugins.mistralai as workflows_mistralai
 from workflows.rag_qa import (
     DEFAULT_FORBIDDEN_ANSWER,
     MODEL,
+    ForbiddenTopicCheck,
+    RewriteResult,
     check_forbidden_topic,
     generate_answer,
     identify_synonyms,
@@ -86,26 +88,46 @@ class RagQaAgentWorkflow(workflows.InteractiveWorkflow):
     ) -> workflows_mistralai.ChatAssistantWorkflowOutput:
         if not question:
             await workflows_mistralai.send_assistant_message(
-                "Pose ta question, je vais chercher la reponse."
+                "Pose ta question, je vais chercher la réponse."
             )
             user_input = await self.wait_for_input(workflows_mistralai.ChatInput())
             question = user_input.message[0].text if user_input.message else ""
 
-        forbidden = await check_forbidden_topic(question)
+        # Fails closed: if the guardrail keeps erroring after retries, block
+        # rather than silently let a possibly unsafe question through.
+        try:
+            forbidden = await check_forbidden_topic(question)
+        except Exception:  # noqa: BLE001 — deliberate fail-closed fallback
+            forbidden = ForbiddenTopicCheck(
+                is_forbidden=True, matched_topic="error-fallback"
+            )
         if forbidden.is_forbidden:
             await workflows_mistralai.send_assistant_message(DEFAULT_FORBIDDEN_ANSWER)
             return workflows_mistralai.ChatAssistantWorkflowOutput(
                 content=[workflows_mistralai.TextOutput(text=DEFAULT_FORBIDDEN_ANSWER)]
             )
 
-        rewritten = await rewrite_query(question)
+        # Rewriting is an optimization, not a hard requirement: degrade to
+        # searching with the raw question rather than failing the pipeline.
+        try:
+            rewritten = await rewrite_query(question)
+            if not rewritten.keywords.strip():
+                rewritten = RewriteResult(keywords=question)
+        except Exception:  # noqa: BLE001 — deliberate graceful degradation
+            rewritten = RewriteResult(keywords=question)
 
         # Step 3 — retrieve context via an agent with MCP search/readDoc tools,
         # instead of the direct REST call used in rag_qa.py's search().
         context = await _search_via_agent(rewritten.keywords)
 
         synonyms = await identify_synonyms(question, context)
-        answer = await generate_answer(question, context, synonyms)
+
+        # No good fallback content is possible for the final answer itself,
+        # so fall back to a plain apology message instead of crashing.
+        try:
+            answer = await generate_answer(question, context, synonyms)
+        except Exception:  # noqa: BLE001 — deliberate user-facing fallback
+            answer = "Désolé, je n'ai pas pu générer de réponse pour le moment. Réessaie plus tard."
 
         await workflows_mistralai.send_assistant_message(answer)
         return workflows_mistralai.ChatAssistantWorkflowOutput(

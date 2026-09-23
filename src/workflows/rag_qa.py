@@ -11,7 +11,7 @@ from pathlib import Path
 
 import mistralai.workflows as workflows
 import mistralai.workflows.plugins.mistralai as workflows_mistralai
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 SYNONYMS_PATH = Path(__file__).parent / "synonyms.txt"
 
@@ -23,23 +23,30 @@ MODEL = "ministral-3b-2512"
 FORBIDDEN_TOPICS = [
     "armes et explosifs",
     "fabrication de drogues",
-    "activites illegales",
+    "activités illégales",
 ]
 
 # Fixed, not LLM-generated: the refusal message must not be something a
 # crafted question could influence via the model's own output.
 DEFAULT_FORBIDDEN_ANSWER = (
-    "Je ne peux pas repondre a cette question : le sujet n'est pas autorise."
+    "Je ne peux pas répondre à cette question : le sujet n'est pas autorisé."
 )
 
 
 class ForbiddenTopicCheck(BaseModel):
-    is_forbidden: bool
-    matched_topic: str | None = None
+    is_forbidden: bool = Field(
+        description="True if the question is about one of the forbidden topics listed in the prompt."
+    )
+    matched_topic: str | None = Field(
+        default=None,
+        description="The specific forbidden topic matched, or null if is_forbidden is False.",
+    )
 
 
 class RewriteResult(BaseModel):
-    keywords: str
+    keywords: str = Field(
+        description="Short search query keeping only the key search terms from the question."
+    )
 
 
 @workflows.activity()
@@ -155,6 +162,8 @@ async def generate_answer(question: str, context: str, synonyms: str) -> str:
     # replies; a plain-text prompt like this one always yields a str.
     if not isinstance(content, str):
         raise TypeError(f"Expected plain text answer, got: {type(content).__name__}")
+    if not content.strip():
+        raise ValueError("Empty answer from answer generation LLM call")
     return content
 
 
@@ -178,14 +187,24 @@ class RagQaWorkflow(workflows.InteractiveWorkflow):
     ) -> workflows_mistralai.ChatAssistantWorkflowOutput:
         if not question:
             await workflows_mistralai.send_assistant_message(
-                "Pose ta question, je vais chercher la reponse."
+                "Pose ta question, je vais chercher la réponse."
             )
             user_input = await self.wait_for_input(workflows_mistralai.ChatInput())
             question = user_input.message[0].text if user_input.message else ""
 
         # Step 1 — guardrail. Branching on `forbidden.is_forbidden` is
-        # deterministic: it comes from a recorded activity result.
-        forbidden = await check_forbidden_topic(question)
+        # deterministic: it comes from a recorded activity result. The
+        # try/except wraps the *await*, not the activity body, so the
+        # platform's own retries (see activity decorator defaults) still run
+        # first — this only catches the case where every retry failed.
+        # Fails closed: if the check keeps erroring, block rather than
+        # silently let a possibly unsafe question through.
+        try:
+            forbidden = await check_forbidden_topic(question)
+        except Exception:  # noqa: BLE001 — deliberate fail-closed fallback
+            forbidden = ForbiddenTopicCheck(
+                is_forbidden=True, matched_topic="error-fallback"
+            )
         if forbidden.is_forbidden:
             # The return value alone is never displayed in chat (see
             # notes-concepts.md) — send_assistant_message() is what the
@@ -195,8 +214,15 @@ class RagQaWorkflow(workflows.InteractiveWorkflow):
                 content=[workflows_mistralai.TextOutput(text=DEFAULT_FORBIDDEN_ANSWER)]
             )
 
-        # Step 2 — reformulate the question into search keywords.
-        rewritten = await rewrite_query(question)
+        # Step 2 — reformulate the question into search keywords. Rewriting
+        # is an optimization, not a hard requirement: degrade to searching
+        # with the raw question rather than failing the whole pipeline.
+        try:
+            rewritten = await rewrite_query(question)
+            if not rewritten.keywords.strip():
+                rewritten = RewriteResult(keywords=question)
+        except Exception:  # noqa: BLE001 — deliberate graceful degradation
+            rewritten = RewriteResult(keywords=question)
 
         # Step 3 — retrieve context (mocked for now, see `search`).
         context = await search(rewritten.keywords)
@@ -204,8 +230,13 @@ class RagQaWorkflow(workflows.InteractiveWorkflow):
         # Step 4 — pull in related vocabulary from the synonyms dictionary.
         synonyms = await identify_synonyms(question, context)
 
-        # Step 5 — generate the final answer.
-        answer = await generate_answer(question, context, synonyms)
+        # Step 5 — generate the final answer. No good fallback content is
+        # possible here (that's the whole point of this step), so fall back
+        # to a plain apology message instead of crashing the workflow.
+        try:
+            answer = await generate_answer(question, context, synonyms)
+        except Exception:  # noqa: BLE001 — deliberate user-facing fallback
+            answer = "Désolé, je n'ai pas pu générer de réponse pour le moment. Réessaie plus tard."
 
         await workflows_mistralai.send_assistant_message(answer)
         return workflows_mistralai.ChatAssistantWorkflowOutput(
