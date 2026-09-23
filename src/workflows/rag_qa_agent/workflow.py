@@ -18,8 +18,8 @@ from workflows.rag_qa.activities import (
 from workflows.rag_qa.formats import ForbiddenTopicCheck, RewriteResult
 from workflows.rag_qa.static_prompts import (
     ASK_QUESTION_MESSAGE,
-    DEFAULT_FORBIDDEN_ANSWER,
     GENERATION_ERROR_FALLBACK,
+    get_forbidden_answer,
 )
 
 from .activities import search_via_agent
@@ -51,9 +51,10 @@ class RagQaAgentWorkflow(workflows.InteractiveWorkflow):
                 is_forbidden=True, matched_topic="error-fallback"
             )
         if forbidden.is_forbidden:
-            await workflows_mistralai.send_assistant_message(DEFAULT_FORBIDDEN_ANSWER)
+            forbidden_answer = get_forbidden_answer(forbidden.matched_topic)
+            await workflows_mistralai.send_assistant_message(forbidden_answer)
             return workflows_mistralai.ChatAssistantWorkflowOutput(
-                content=[workflows_mistralai.TextOutput(text=DEFAULT_FORBIDDEN_ANSWER)]
+                content=[workflows_mistralai.TextOutput(text=forbidden_answer)]
             )
 
         # Rewriting is an optimization, not a hard requirement: degrade to

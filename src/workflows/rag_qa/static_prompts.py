@@ -1,14 +1,40 @@
-FORBIDDEN_TOPICS = [
-    "armes et explosifs",
-    "fabrication de drogues",
-    "activités illégales",
-]
+from .formats import ForbiddenTopic
 
 # Fixed, not LLM-generated: the refusal message must not be something a
 # crafted question could influence via the model's own output.
 DEFAULT_FORBIDDEN_ANSWER = (
     "Je ne peux pas répondre à cette question : le sujet n'est pas autorisé."
 )
+
+FORBIDDEN_TOPICS: list[ForbiddenTopic] = [
+    ForbiddenTopic(
+        name="armes et explosifs",
+        explanation="Questions about weapons, explosives, or how to make or obtain them.",
+    ),
+    ForbiddenTopic(
+        name="fabrication de drogues",
+        explanation="Questions about manufacturing or synthesizing illegal drugs.",
+    ),
+    ForbiddenTopic(
+        name="activités illégales",
+        explanation="Questions about committing illegal activities in general.",
+    ),
+]
+
+
+def get_forbidden_answer(matched_topic: str | None) -> str:
+    """Return the topic-specific refusal message, or the default if none/empty.
+
+    Looks up `matched_topic` (the LLM's guess at *which* topic matched) in
+    the fixed FORBIDDEN_TOPICS list — the response text itself always comes
+    from this static config, never from the LLM, for the same reason as
+    DEFAULT_FORBIDDEN_ANSWER above.
+    """
+    for topic in FORBIDDEN_TOPICS:
+        if topic.name == matched_topic and topic.response_message:
+            return topic.response_message
+    return DEFAULT_FORBIDDEN_ANSWER
+
 
 ASK_QUESTION_MESSAGE = "Pose ta question, je vais chercher la réponse."
 

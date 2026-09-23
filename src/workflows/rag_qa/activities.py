@@ -24,7 +24,9 @@ MODEL = "ministral-3b-2512"
 @workflows.activity()
 async def check_forbidden_topic(question: str) -> ForbiddenTopicCheck:
     """Ask the LLM whether the question is about one of the forbidden topics."""
-    topics = "\n".join(f"- {topic}" for topic in FORBIDDEN_TOPICS)
+    topics = "\n".join(
+        f"- {topic.name}: {topic.explanation}" for topic in FORBIDDEN_TOPICS
+    )
     request = workflows_mistralai.ChatCompletionRequest(
         model=MODEL,
         messages=[

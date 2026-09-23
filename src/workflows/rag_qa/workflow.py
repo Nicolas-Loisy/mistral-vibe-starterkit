@@ -13,8 +13,8 @@ from .activities import (
 from .formats import ForbiddenTopicCheck, RewriteResult
 from .static_prompts import (
     ASK_QUESTION_MESSAGE,
-    DEFAULT_FORBIDDEN_ANSWER,
     GENERATION_ERROR_FALLBACK,
+    get_forbidden_answer,
 )
 
 
@@ -57,10 +57,12 @@ class RagQaWorkflow(workflows.InteractiveWorkflow):
         if forbidden.is_forbidden:
             # The return value alone is never displayed in chat (see
             # notes-concepts.md) — send_assistant_message() is what the
-            # user actually sees.
-            await workflows_mistralai.send_assistant_message(DEFAULT_FORBIDDEN_ANSWER)
+            # user actually sees. The message itself always comes from
+            # static config (topic-specific or default), never the LLM.
+            forbidden_answer = get_forbidden_answer(forbidden.matched_topic)
+            await workflows_mistralai.send_assistant_message(forbidden_answer)
             return workflows_mistralai.ChatAssistantWorkflowOutput(
-                content=[workflows_mistralai.TextOutput(text=DEFAULT_FORBIDDEN_ANSWER)]
+                content=[workflows_mistralai.TextOutput(text=forbidden_answer)]
             )
 
         # Step 2 — reformulate the question into search keywords. Rewriting
