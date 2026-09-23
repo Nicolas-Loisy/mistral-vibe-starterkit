@@ -1,17 +1,9 @@
 """Minimal example workflow — edit this file or create new ones."""
 
 import mistralai.workflows as workflows
-from pydantic import BaseModel
 
-
-class HelloInput(BaseModel):
-    name: str = "World"
-
-
-@workflows.activity()
-async def greet(name: str) -> str:
-    """A simple activity that returns a greeting."""
-    return f"Hello, {name}! Welcome to Mistral Workflows."
+from .activities import greet
+from .formats import HelloInput
 
 
 @workflows.workflow.define(

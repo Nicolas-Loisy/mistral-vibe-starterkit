@@ -1,9 +1,11 @@
-"""Conversational counterpart to hello.py: pauses to ask for a name in chat."""
+"""Conversational counterpart to hello: pauses to ask for a name in chat."""
 
 import mistralai.workflows as workflows
 import mistralai.workflows.plugins.mistralai as workflows_mistralai
 
-from workflows.hello import greet
+from workflows.hello.activities import greet
+
+from .static_prompts import ASK_NAME_MESSAGE
 
 
 @workflows.workflow.define(
@@ -14,7 +16,7 @@ from workflows.hello import greet
 class HelloChatWorkflow(workflows.InteractiveWorkflow):
     @workflows.workflow.entrypoint
     async def run(self) -> workflows_mistralai.ChatAssistantWorkflowOutput:
-        await workflows_mistralai.send_assistant_message("Hi! What's your name?")
+        await workflows_mistralai.send_assistant_message(ASK_NAME_MESSAGE)
 
         user_input = await self.wait_for_input(workflows_mistralai.ChatInput())
         name = user_input.message[0].text if user_input.message else "World"

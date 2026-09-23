@@ -77,11 +77,11 @@ distinctes s'additionnent, et `hello-world` ne remplit ni l'une ni l'autre :
    Faire tourner un worker en local et exécuter le workflow via `make
    execute` ne publie rien — ce sont deux mécanismes séparés.
 
-`hello-world` (dans `src/workflows/hello.py`) reste utile pour tester la
-mécanique de base (worker ↔ exécution ↔ résultat), visible dans la console
-Studio. `hello_chat.py` (dans `src/workflows/hello_chat.py`) est la version
-conversationnelle : elle remplit la condition n°1 (éligible à Vibe), mais
-n'a pas encore été publiée dans un workspace (condition n°2).
+`hello-world` (`src/workflows/hello/`) reste utile pour tester la mécanique
+de base (worker ↔ exécution ↔ résultat), visible dans la console Studio.
+`hello-chat` (`src/workflows/hello_chat/`) est la version conversationnelle :
+elle remplit la condition n°1 (éligible à Vibe), mais n'a pas encore été
+publiée dans un workspace (condition n°2).
 
 ### Piège rencontré : le `return` n'affiche rien dans le chat
 
@@ -104,25 +104,29 @@ tout ce qui doit apparaître à l'écran doit passer par
 `send_assistant_message()` explicitement, le `return` final ne sert qu'à
 terminer le workflow et transporter la donnée structurée.
 
-### Piège rencontré : les sous-dossiers de `src/workflows/` sont ignorés
+### Piège rencontré (corrigé depuis) : les sous-dossiers de `src/workflows/` étaient ignorés
 
-En construisant `rag_qa.py` (pipeline RAG), tentation naturelle : suivre le
-découpage `activities.py` / `models.py` / `workflow.py` utilisé dans
-`src/examples/*` (voir plus bas). Mais ce découpage n'est pas discoverable
-par défaut.
+En construisant `rag_qa.py` (pipeline RAG) à l'origine, tentation naturelle :
+suivre le découpage `activities.py` / `models.py` / `workflow.py` utilisé
+dans `src/examples/*` (voir plus bas). Mais ce découpage n'était pas
+discoverable par défaut.
 
-Cause : `discover_workflows()` dans `src/entrypoints/worker.py` scanne
-`src/workflows/` avec `pkgutil.iter_modules(...)` et ignore explicitement
-tout sous-package (`if ispkg: continue`). `src/examples/` échappe à cette
-règle uniquement parce qu'il a son propre worker dédié
-(`src/examples/worker.py`) qui importe les workflows explicitement, sans
-passer par cette découverte automatique.
+Cause : `discover_workflows()` dans `src/entrypoints/worker.py` scannait
+`src/workflows/` avec `pkgutil.iter_modules(...)`, qui ignore explicitement
+tout sous-package (`if ispkg: continue`) — il ne descend pas dedans.
+`src/examples/` échappait à cette règle uniquement parce qu'il a son propre
+worker dédié (`src/examples/worker.py`) qui importe les workflows
+explicitement, sans passer par cette découverte automatique.
 
-Conséquence pratique : tant qu'on n'a pas modifié `discover_workflows()`
-pour qu'il parcoure aussi les sous-dossiers, chaque workflow personnel dans
-`src/workflows/` doit rester un **module plat** (un seul fichier `.py`,
-comme `hello.py` et `rag_qa.py`), même s'il regroupe plusieurs classes et
-activities dans ce même fichier.
+**Correction appliquée** : `discover_workflows()` utilise maintenant
+`pkgutil.walk_packages(...)` (récursif) au lieu de `iter_modules(...)`
+(un seul niveau). Chaque workflow personnel vit maintenant dans son propre
+sous-dossier de `src/workflows/` (`hello/`, `hello_chat/`, `rag_qa/`,
+`rag_qa_agent/`, `whoami/`), avec la convention `activities.py` /
+`formats.py` (modèles Pydantic) / `static_prompts.py` (textes fixes :
+prompts système, messages de chat) / `workflow.py` (la classe de workflow).
+Vérifié après coup : `discover_workflows()` retrouve bien les 5 workflows
+dans leurs sous-dossiers respectifs.
 
 ### Piège rencontré : le rate limit dépend du modèle, pas juste du compte
 

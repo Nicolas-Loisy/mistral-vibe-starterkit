@@ -18,14 +18,19 @@ from mistralai.workflows.core.definition.workflow_definition import (
 
 
 def discover_workflows() -> list[type]:
-    """Scan the `workflows` package and return all workflow classes."""
+    """Scan the `workflows` package (including subpackages) and return all workflow classes.
+
+    Uses walk_packages (recursive), not iter_modules (one level only), so a
+    workflow can live in its own subpackage (workflows/<name>/workflow.py
+    etc.) instead of a single flat module.
+    """
     discovered = []
     package = importlib.import_module("workflows")
 
-    for _, modname, ispkg in pkgutil.iter_modules(package.__path__, prefix="workflows."):
-        if ispkg:
+    for module_info in pkgutil.walk_packages(package.__path__, prefix="workflows."):
+        if module_info.ispkg:
             continue
-        module = importlib.import_module(modname)
+        module = importlib.import_module(module_info.name)
         for _, obj in inspect.getmembers(module, inspect.isclass):
             if hasattr(obj, "__workflows_workflow_def"):
                 discovered.append(obj)

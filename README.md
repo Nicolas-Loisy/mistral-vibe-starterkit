@@ -61,6 +61,12 @@ src/
 └── examples/    # Example workflow cookbooks (opt-in via `examples.worker`)
 ```
 
+Each workflow lives in its own subfolder under `src/workflows/<name>/`:
+`activities.py` (the `@workflows.activity()` functions), `formats.py`
+(Pydantic models for structured I/O), `static_prompts.py` (fixed prompt/
+message text), and `workflow.py` (the `@workflows.workflow.define` class).
+Discovery is recursive, so nested subfolders are picked up automatically.
+
 ## Development
 
 ```bash

@@ -78,6 +78,7 @@ la structure de projet :
 src/
   entrypoints/     # worker.py, start.py, dev.py — points d'entrée exécutables
   workflows/       # tes workflows (auto-découverts par le worker) — hello.py au départ
+                   # (depuis réorganisé en un sous-dossier par workflow, voir notes-concepts.md)
   examples/        # cookbooks complets, non chargés par défaut
 .agents/skills/workflows/  # doc de référence du framework, pour un assistant IA
 Makefile           # commandes utilitaires (start-worker, execute, lint, ...)
@@ -114,8 +115,9 @@ Résultat obtenu :
 {"result": "Hello, TonPrenom! Welcome to Mistral Workflows."}
 ```
 
-Le workflow `hello-world` (défini dans `src/workflows/hello.py`) tourne donc
-de bout en bout : worker local ↔ API Mistral ↔ exécution ↔ résultat.
+Le workflow `hello-world` (défini à l'époque dans `src/workflows/hello.py`,
+aujourd'hui `src/workflows/hello/workflow.py`) tourne donc de bout en bout :
+worker local ↔ API Mistral ↔ exécution ↔ résultat.
 
 ## Et ensuite
 
