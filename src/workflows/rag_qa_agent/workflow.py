@@ -72,14 +72,16 @@ class RagQaAgentWorkflow(workflows.InteractiveWorkflow):
 
         synonyms = await identify_synonyms(question, context)
 
-        # No good fallback content is possible for the final answer itself,
-        # so fall back to a plain apology message instead of crashing.
+        # generate_answer() streams the answer live to the chat itself
+        # (RemoteSession(stream=True)), so on success there's nothing left to
+        # send here. No good fallback content is possible on failure — and
+        # since nothing was streamed in that case, send the apology explicitly.
         try:
             answer = await generate_answer(question, context, synonyms)
         except Exception:  # noqa: BLE001 — deliberate user-facing fallback
             answer = GENERATION_ERROR_FALLBACK
+            await workflows_mistralai.send_assistant_message(answer)
 
-        await workflows_mistralai.send_assistant_message(answer)
         return workflows_mistralai.ChatAssistantWorkflowOutput(
             content=[workflows_mistralai.TextOutput(text=answer)]
         )

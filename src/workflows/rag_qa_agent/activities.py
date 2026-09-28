@@ -47,6 +47,7 @@ async def search_via_agent(keywords: str) -> str:
         session=workflows_mistralai.RemoteSession(),
     )
     texts: list[str] = []
+    # A single reply can span several TextChunk entries; keep only the text ones and join them.
     for output in outputs:
         if isinstance(output, workflows_mistralai.TextChunk):
             texts.append(output.text)
