@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A Mistral Workflows project"
 requires-python = ">=3.12"
 dependencies = [
+    "httpx>=0.28.1",
     "mistralai-workflows[mistralai]>=3.0.0,<4",
     "pydantic",
     "python-dotenv",

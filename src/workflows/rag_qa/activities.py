@@ -59,14 +59,29 @@ async def rewrite_query(question: str) -> RewriteResult:
 async def search(keywords: str) -> str:
     """Query an external search/retrieval tool for context.
 
-    MOCK: no real endpoint wired yet. Swap this body for an HTTP call (e.g.
-    httpx.get(SEARCH_API_URL, params={"q": keywords})) once a real search
-    tool is available — the signature (keywords in, context text out) and
-    the retry policy above are already set up for that transition.
+    TEST: calls httpbin.org (a public echo service, no auth/config needed)
+    to validate that a real outbound HTTP request works correctly from
+    inside an activity — network I/O belongs here, never in the workflow
+    body. Swap the URL/response parsing for the real search tool once
+    available; the signature (keywords in, context text out) and the retry
+    policy above are already set up for that transition.
     """
-    return (
-        f"[mock context for keywords: {keywords!r}] Lorem ipsum dolor sit amet canin."
-    )
+    # return (
+    #     f"[mock context for keywords: {keywords!r}] Lorem ipsum dolor sit amet canin."
+    # )
+
+    # Imported here, not at module level: httpx subclasses urllib.request.Request
+    # at import time (cookie compat), which the workflow sandbox restricts when
+    # this module is pulled in transitively via workflow.py's `from .activities
+    # import ...`. A function-local import only runs when the activity actually
+    # executes (outside the sandbox), so it never triggers that check.
+    import httpx
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get("https://httpbin.org/get", params={"q": keywords})
+        response.raise_for_status()
+        data = response.json()
+    return f"[real HTTP call via httpbin.org] origin={data.get('origin')} echoed_query={data.get('args')}"
 
 
 @workflows.activity()
@@ -96,30 +111,37 @@ async def identify_synonyms(question: str, context: str) -> str:
     return "\n".join(matched_lines)
 
 
-@workflows.activity()
 async def generate_answer(question: str, context: str, synonyms: str) -> str:
-    """Produce the final answer from the retrieved context and synonyms list."""
-    request = workflows_mistralai.ChatCompletionRequest(
+    """Produce the final answer, streamed live to the chat as tokens arrive.
+
+    Plain function, not @workflows.activity(): called directly from the
+    workflow body, same as rag_qa_agent's search_via_agent — Runner.run()
+    already schedules its own durable calls internally. Using
+    RemoteSession(stream=True) makes Vibe display tokens live with no extra
+    code (see assist-workflows guide, "Streaming Agent Responses").
+    """
+    agent = workflows_mistralai.Agent(
         model=MODEL,
-        messages=[
-            workflows_mistralai.SystemMessage(content=ANSWER_SYSTEM_PROMPT),
-            workflows_mistralai.UserMessage(
-                content=(
-                    f"Context:\n{context}\n\n"
-                    f"Related terms:\n{synonyms or '(none)'}\n\n"
-                    f"Question: {question}"
-                )
-            ),
-        ],
+        name="answer-agent",
+        description="Answers the user's question using the retrieved context.",
+        instructions=ANSWER_SYSTEM_PROMPT,
     )
-    response = await workflows_mistralai.mistralai_chat_complete(request)
-    if not response.choices or not response.choices[0].message:
-        raise ValueError("Empty response from answer generation LLM call")
-    content = response.choices[0].message.content
-    # .content is typed as str | list[...chunk types...] to support multimodal
-    # replies; a plain-text prompt like this one always yields a str.
-    if not isinstance(content, str):
-        raise TypeError(f"Expected plain text answer, got: {type(content).__name__}")
-    if not content.strip():
-        raise ValueError("Empty answer from answer generation LLM call")
-    return content
+    prompt = (
+        f"Context:\n{context}\n\n"
+        f"Related terms:\n{synonyms or '(none)'}\n\n"
+        f"Question: {question}"
+    )
+    outputs = await workflows_mistralai.Runner.run(
+        agent=agent,
+        inputs=prompt,
+        session=workflows_mistralai.RemoteSession(stream=True),
+    )
+    texts: list[str] = []
+    # A single reply can span several TextChunk entries; keep only the text ones and join them.
+    for output in outputs:
+        if isinstance(output, workflows_mistralai.TextChunk):
+            texts.append(output.text)
+    answer = "\n".join(texts)
+    if not answer.strip():
+        raise ValueError("Empty answer from answer generation agent")
+    return answer
