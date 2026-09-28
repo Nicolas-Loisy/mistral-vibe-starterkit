@@ -8,23 +8,18 @@ history-aware (see activities.py in this package). Guardrail and rewrite
 stay scoped to the current question only, per the stated requirement that
 just the answer needs the history.
 
-Uses continue_as_new (workflows.mdx, "Continue-As-New") rather than a fixed
-turn limit: execution history is capped at ~51,200 events, so a workflow
-meant to loop indefinitely should periodically reset its history instead of
-being artificially bounded. continue_as_new's real signature (verified
-against the installed SDK, not the docs) takes a single BaseModel, not the
-dict shown in workflows.mdx's example.
-
-The entrypoint takes a *union* of two models (RagQaChatInput |
-RagQaChatResumeState) rather than one model bundling question+history:
-a single model exposing `history` would show up as a fillable field in
-Vibe's launch form, which makes no sense for a fresh conversation. Per
-core_concepts/workflows and assist-workflows.mdx's "Tagging Input Variants",
-a tagged union lets the public launch shape stay clean (just `question`)
-while continue_as_new still gets to carry richer state internally.
+Entrypoint takes a bare `question: str = ""`, same as RagQaWorkflow — NOT a
+BaseModel. Confirmed by live-testing in Vibe: any BaseModel-typed entrypoint
+(even a minimal, single-field one, even with a tagged union to keep the
+schema clean — see git history of this file) renders as a raw JSON form in
+Vibe's launch UI, while a bare scalar parameter renders as a clean text
+field. Since continue_as_new() requires a BaseModel (verified against the
+installed SDK), that mechanism doesn't fit this constraint: history is kept
+as in-memory state for the lifetime of a single execution instead, bounded
+by MAX_TURNS as a pragmatic safety net against the ~51,200 event execution
+history cap (see limitations.mdx) — never realistically reached by an actual
+conversation at this scale.
 """
-
-from datetime import timedelta
 
 import mistralai.workflows as workflows
 import mistralai.workflows.plugins.mistralai as workflows_mistralai
@@ -39,49 +34,40 @@ from workflows.rag_qa.formats import ForbiddenTopicCheck, RewriteResult
 from workflows.rag_qa.static_prompts import get_forbidden_answer
 
 from .activities import generate_answer_with_history
-from .formats import QaTurn, RagQaChatInput, RagQaChatResumeState
+from .formats import QaTurn
 from .static_prompts import (
     ASK_FIRST_QUESTION_MESSAGE,
     ASK_NEXT_QUESTION_MESSAGE,
+    CONVERSATION_ENDED_MESSAGE,
     GENERATION_ERROR_FALLBACK,
 )
 
-_DEFAULT_INPUT = RagQaChatInput()
+MAX_TURNS = 50
 
 
 @workflows.workflow.define(
     name="rag-qa-chat",
     workflow_display_name="RAG Q&A (Conversation)",
     workflow_description="Same as RAG Q&A, but keeps running across several questions, with history-aware answers.",
-    # Workflows default to a 1-hour execution timeout (see cargo_release
-    # example); a chat session that goes quiet between questions for longer
-    # than that would otherwise be killed even though continue_as_new keeps
-    # resetting its event history. A month comfortably covers any real
-    # conversation without leaving the timeout unbounded.
-    execution_timeout=timedelta(days=30),
 )
 class RagQaChatWorkflow(workflows.InteractiveWorkflow):
     """One execution, many turns: asks a question, answers, asks again, ...
 
-    `params` is `RagQaChatInput` (just a question, the normal launch shape)
-    on a fresh start, or `RagQaChatResumeState` (question + history) when
-    the SDK re-invokes this via continue_as_new — see module docstring.
+    `question` is optional, same convention as RagQaWorkflow: fills the
+    first turn directly if the launch message already carried it.
     """
 
     @workflows.workflow.entrypoint
     async def run(
-        self, params: RagQaChatInput | RagQaChatResumeState = _DEFAULT_INPUT
+        self, question: str = ""
     ) -> workflows_mistralai.ChatAssistantWorkflowOutput:
-        question = params.question
-        history = (
-            list(params.history) if isinstance(params, RagQaChatResumeState) else []
-        )
+        history: list[QaTurn] = []
 
-        while True:
+        for turn in range(MAX_TURNS):
             if not question:
                 prompt_message = (
                     ASK_FIRST_QUESTION_MESSAGE
-                    if not history
+                    if turn == 0
                     else ASK_NEXT_QUESTION_MESSAGE
                 )
                 await workflows_mistralai.send_assistant_message(prompt_message)
@@ -126,11 +112,11 @@ class RagQaChatWorkflow(workflows.InteractiveWorkflow):
 
             question = ""
 
-            # Reset event history once it grows large, carrying the
-            # conversation history forward into a fresh run — see module
-            # docstring. Ends this run immediately; nothing after this call
-            # in the current run executes once it triggers.
-            if workflows.workflow.should_continue_as_new():
-                workflows.workflow.continue_as_new(
-                    RagQaChatResumeState(question="", history=history)
+        await workflows_mistralai.send_assistant_message(CONVERSATION_ENDED_MESSAGE)
+        return workflows_mistralai.ChatAssistantWorkflowOutput(
+            content=[
+                workflows_mistralai.TextOutput(
+                    text=history[-1].answer if history else ""
                 )
+            ]
+        )
