@@ -8,17 +8,12 @@ Runner.run() already schedules its own durable tool calls internally.
 
 import os
 
+import mistralai.workflows as workflows
 import mistralai.workflows.plugins.mistralai as workflows_mistralai
 
 from workflows.rag_qa.activities import MODEL
 
 from .static_prompts import SEARCH_AGENT_INSTRUCTIONS
-
-# TODO: point this at the real MCP server exposing the `search` and `readDoc`
-# tools once it's registered/configured. Placeholder for now.
-SEARCH_MCP_URL = os.environ.get(
-    "SEARCH_MCP_URL", "https://TODO-configure-search-mcp-server/sse"
-)
 
 # Name of the worker env var holding the bearer token for the MCP server —
 # not the token itself. Only this name is ever persisted in Temporal event
@@ -26,10 +21,35 @@ SEARCH_MCP_URL = os.environ.get(
 SEARCH_MCP_AUTH_TOKEN_ENV = "SEARCH_MCP_TOKEN"
 
 
-async def search_via_agent(keywords: str) -> str:
+@workflows.activity()
+async def get_search_mcp_url() -> str:
+    """Resolve the MCP server URL from the worker's environment.
+
+    A dedicated activity, not inlined into search_via_agent: os.environ
+    access is non-deterministic, and the SDK's determinism rules forbid it
+    anywhere in the workflow body — which includes search_via_agent, since
+    that function is called directly from workflow.py rather than dispatched
+    as its own activity (see this module's docstring). Only code that
+    actually runs inside an activity may read the environment.
+    """
+    # TODO: point this at the real MCP server exposing the `search` and
+    # `readDoc` tools once it's registered/configured. Placeholder for now.
+    return os.environ.get(
+        "SEARCH_MCP_URL", "https://TODO-configure-search-mcp-server/sse"
+    )
+
+
+async def search_via_agent(keywords: str, search_mcp_url: str) -> str:
     """Run a durable agent with MCP `search`/`readDoc` tools to gather context."""
+    # Imported here, not at module level: mistralai.client.models transitively
+    # imports httpx, which subclasses urllib.request.Request at import time —
+    # the workflow sandbox restricts that when this module is pulled in
+    # transitively via workflow.py's `from .activities import ...` (same
+    # issue as rag_qa/activities.py's httpx import; see notes-concepts.md).
+    from mistralai.client import models as mistralai_models
+
     mcp_config = workflows_mistralai.MCPStreamableHTTPConfig(
-        url=SEARCH_MCP_URL,
+        url=search_mcp_url,
         name="enterprise-search",
         timeout=60,
         auth_token_env=SEARCH_MCP_AUTH_TOKEN_ENV,
@@ -43,12 +63,23 @@ async def search_via_agent(keywords: str) -> str:
     )
     outputs = await workflows_mistralai.Runner.run(
         agent=agent,
-        inputs=keywords,
+        inputs="keywords to search : " + keywords,
         session=workflows_mistralai.RemoteSession(),
+        # Needs at least 3 rounds (search, readDoc, final synthesis);
+        # max_turns=2 was confirmed (empirically) to cut the agent off
+        # before it could write its answer, returning an empty string.
+        max_turns=5,
     )
-    texts: list[str] = []
-    # A single reply can span several TextChunk entries; keep only the text ones and join them.
-    for output in outputs:
-        if isinstance(output, workflows_mistralai.TextChunk):
-            texts.append(output.text)
+    # A reply can span several chunks (e.g. text mixed with other content
+    # types); keep only the text ones and join them. Must be
+    # mistralai_models.TextChunk (mistralai.client.models), NOT
+    # workflows_mistralai.TextChunk (mistralai.workflows.conversational) —
+    # the two are unrelated same-named classes, and Runner.run()'s
+    # FinalOutputs is typed, and every Session.format_final_outputs()
+    # implementation confirmed, to only ever produce mistralai_models ones.
+    texts = [
+        output.text
+        for output in outputs
+        if isinstance(output, mistralai_models.TextChunk)
+    ]
     return "\n".join(texts)

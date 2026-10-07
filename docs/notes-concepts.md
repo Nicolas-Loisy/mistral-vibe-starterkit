@@ -148,6 +148,118 @@ politique de retry côté code — le goulot d'étranglement peut être le choix
 du modèle, pas la fréquence d'appel. Le nom du modèle est centralisé dans la
 constante `MODEL` en haut de `rag_qa.py` pour rendre ce genre de test rapide.
 
+### Piège rencontré : deux classes différentes portent le même nom `TextChunk`
+
+En branchant `search_via_agent()` (recherche via agent + outils MCP) sur un
+vrai serveur MCP local, la fonction retournait systématiquement une chaîne
+vide — alors que les logs du worker montraient bien l'agent exécuter ses
+outils (`search`, `read_doc`) et produire une réponse. Le symptôme s'est
+propagé sans surprise à `generate_answer()` (`rag_qa`) : son retour était
+lui aussi vide, mais invisible car l'agent est configuré avec
+`RemoteSession(stream=True)`, qui affiche les tokens au fil de l'eau
+directement dans le chat — masquant que la valeur de retour de la fonction,
+elle, était vide. Conséquence concrète : dans `rag_qa`, le `try/except`
+autour de `generate_answer()` déclenchait quand même le message d'excuses
+de secours (`GENERATION_ERROR_FALLBACK`) juste après la vraie réponse
+déjà affichée par le streaming, pour un lecteur ça ressemblait à une
+réponse suivie d'une erreur sans rapport.
+
+Cause : le SDK contient **deux classes distinctes qui portent le même nom**
+`TextChunk` — `mistralai.workflows.plugins.mistralai.TextChunk` (module
+`mistralai.workflows.conversational`) et `mistralai.client.models.TextChunk`
+(module `mistralai.client.models.textchunk`). Le code du projet ne testait
+que la première : `isinstance(output, workflows_mistralai.TextChunk)`. Or en
+lisant le code source du SDK (`Session.format_final_outputs()`, implémenté
+par `RemoteSession`, `LocalSession` et `MockSession`), aucune des trois
+implémentations ne construit ni ne renvoie jamais la classe
+`workflows_mistralai.TextChunk` : chacune construit explicitement
+`mistralai_models.TextChunk(text=...)`, et le type de retour de
+`Runner.run()` est lui-même annoté `FinalOutputs = list[mistralai_models.ContentChunk]`.
+Autrement dit, la classe testée par le code n'est **jamais** celle produite
+en pratique — l'`isinstance` échouait à tous les coups, la boucle de
+collecte de texte ne remplissait jamais `texts`, et la fonction renvoyait
+`""` sans aucune erreur ni log.
+
+**Correction appliquée** : vérifier uniquement la bonne classe,
+`isinstance(output, mistralai_models.TextChunk)`, avec `mistralai_models`
+importé via `from mistralai.client import models as mistralai_models` — et
+non les deux comme une première correction trop prudente l'avait fait (la
+branche `workflows_mistralai.TextChunk` ne pouvant jamais matcher, autant
+ne pas la garder). Import fait **à l'intérieur de la fonction**, pas en
+haut du fichier, pour la même raison que l'import de `httpx` plus haut (ce
+module importe transitivement `httpx`, qui déclenche la même restriction
+du sandbox) — placé en tout début de fonction (juste après la docstring),
+sans dépendance avec le reste du corps, plutôt qu'au milieu du code juste
+avant son usage. Corrigé dans `search_via_agent()`
+(`rag_qa_agent/activities.py`) et `generate_answer()`
+(`rag_qa/activities.py`).
+
+La boucle elle-même reste nécessaire malgré tout : `outputs` est une liste
+(`FinalOutputs = list[ContentChunk]`), pas une valeur unique — une réponse
+dont le contenu est une liste de chunks (plutôt qu'une simple chaîne) peut
+mélanger du texte avec d'autres types de chunk ; filtrer sur `TextChunk`
+avant de joindre reste donc la bonne approche, ce n'est pas du code mort.
+
+Leçon : quand une fonction censée retourner du texte d'agent renvoie une
+chaîne vide sans erreur, vérifier d'abord ce que contient réellement la
+liste `outputs` (via un `print` temporaire), puis lire le code source de
+`format_final_outputs()` pour savoir quelle classe est *effectivement*
+produite plutôt que d'ajouter une vérification supplémentaire « au cas où »
+— un `isinstance` qui échoue silencieusement contre la mauvaise classe est
+une cause bien plus probable qu'un problème côté outils ou côté modèle, et
+la bonne correction est précise, pas défensive.
+
+### Piège rencontré : deux restrictions différentes se ressemblent (import vs déterminisme à l'exécution)
+
+`search_via_agent()` lit l'URL du serveur MCP via `os.environ.get("SEARCH_MCP_URL", ...)`.
+Premier réflexe (par analogie avec le piège `httpx` ci-dessus) : déplacer cet
+appel à l'intérieur de la fonction plutôt qu'au niveau module. Résultat :
+`make start-worker` / l'enregistrement du worker passe sans erreur, un appel
+direct à `search_via_agent()` en script Python retourne bien du contexte —
+et pourtant l'erreur `cannot access os.environ.get from inside a workflow`
+persistait toujours à l'exécution réelle du workflow.
+
+Cause : ce sont **deux restrictions distinctes du sandbox**, qui se
+ressemblent mais ne se corrigent pas de la même façon :
+
+- **Restriction à l'import** (le cas `httpx`/ `mistralai.client.models`) :
+  déclenchée quand le *chargement* du module exécute du code interdit
+  (ex. une classe qui hérite de `urllib.request.Request` à la définition).
+  Se corrige en déplaçant l'import **dans une fonction**, peu importe
+  laquelle — le code n'est alors plus exécuté pendant la validation du
+  sandbox à l'import.
+- **Restriction au déterminisme à l'exécution** (le cas `os.environ`) :
+  déclenchée par un *appel* non-déterministe (lire l'environnement, l'heure,
+  un nombre aléatoire, faire un I/O direct...) fait par du code qui
+  s'exécute **dans le contexte du workflow** — c'est-à-dire tout code
+  atteint par un `await` direct depuis le corps du workflow, même si ce code
+  vit dans un fichier `activities.py` et dans une fonction séparée. Le
+  déplacer à l'intérieur de la fonction ne change rien : `search_via_agent()`
+  elle-même tourne dans le contexte du workflow (c'est voulu, pour laisser
+  `Runner.run()` gérer ses propres sous-activités — voir plus haut), donc
+  tout son corps reste soumis à cette règle. Seul le fait d'être exécuté
+  comme **véritable activité** (via `@workflows.activity()`, dispatché sur
+  le worker) en sort.
+
+**Correction appliquée** : extraction d'une activité dédiée,
+`get_search_mcp_url()` (décorée `@workflows.activity()`), qui fait le seul
+`os.environ.get(...)`. Le workflow l'appelle (`await get_search_mcp_url()`)
+et passe la valeur résolue en paramètre à `search_via_agent(keywords,
+search_mcp_url)`, qui elle-même reste une fonction ordinaire appelée
+directement depuis le workflow.
+
+Leçon : deux pièges qui produisent une erreur « sandbox » à première vue
+similaire peuvent avoir des remèdes différents. Avant de supposer qu'un
+« déplacer dans la fonction » suffit, se demander si cette fonction est
+elle-même une vraie activité (`@workflows.activity()`, dispatchée sur le
+worker) ou une fonction ordinaire appelée en direct depuis le workflow —
+dans ce second cas, c'est tout son corps qui reste dans le contexte du
+workflow, et seule une opération *non-déterministe* déplacée dans une
+**vraie activité séparée** résout le problème. Un test qui appelle la
+fonction directement en script Python (hors contexte workflow) ne détecte
+pas ce genre de piège : il faut une exécution réelle (worker + déclenchement
+via Studio/Vibe ou `make execute`) pour le voir se manifester.
+
 ## Architecture hybride
 
 Mistral héberge l'**orchestrateur** : l'état des workflows, l'historique

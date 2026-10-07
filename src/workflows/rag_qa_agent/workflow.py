@@ -22,7 +22,7 @@ from workflows.rag_qa.static_prompts import (
     get_forbidden_answer,
 )
 
-from .activities import search_via_agent
+from .activities import get_search_mcp_url, search_via_agent
 
 
 @workflows.workflow.define(
@@ -67,8 +67,12 @@ class RagQaAgentWorkflow(workflows.InteractiveWorkflow):
             rewritten = RewriteResult(keywords=question)
 
         # Step 3 — retrieve context via an agent with MCP search/readDoc tools,
-        # instead of the direct REST call used in rag_qa's search().
-        context = await search_via_agent(rewritten.keywords)
+        # instead of the direct REST call used in rag_qa's search(). The MCP
+        # URL is resolved in its own activity (not read directly here or
+        # inside search_via_agent): os.environ access is non-deterministic
+        # and the SDK forbids it anywhere in the workflow body.
+        search_mcp_url = await get_search_mcp_url()
+        context = await search_via_agent(rewritten.keywords, search_mcp_url)
 
         synonyms = await identify_synonyms(question, context)
 

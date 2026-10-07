@@ -120,6 +120,13 @@ async def generate_answer(question: str, context: str, synonyms: str) -> str:
     RemoteSession(stream=True) makes Vibe display tokens live with no extra
     code (see assist-workflows guide, "Streaming Agent Responses").
     """
+    # Imported here, not at module level: mistralai.client.models transitively
+    # imports httpx, which subclasses urllib.request.Request at import time —
+    # the workflow sandbox restricts that when this module is pulled in
+    # transitively via workflow.py's `from .activities import ...` (same
+    # issue as this file's own httpx import above; see notes-concepts.md).
+    from mistralai.client import models as mistralai_models
+
     agent = workflows_mistralai.Agent(
         model=MODEL,
         name="answer-agent",
@@ -136,11 +143,18 @@ async def generate_answer(question: str, context: str, synonyms: str) -> str:
         inputs=prompt,
         session=workflows_mistralai.RemoteSession(stream=True),
     )
-    texts: list[str] = []
-    # A single reply can span several TextChunk entries; keep only the text ones and join them.
-    for output in outputs:
-        if isinstance(output, workflows_mistralai.TextChunk):
-            texts.append(output.text)
+    # A reply can span several chunks (e.g. text mixed with other content
+    # types); keep only the text ones and join them. Must be
+    # mistralai_models.TextChunk (mistralai.client.models), NOT
+    # workflows_mistralai.TextChunk (mistralai.workflows.conversational) —
+    # the two are unrelated same-named classes, and Runner.run()'s
+    # FinalOutputs is typed, and every Session.format_final_outputs()
+    # implementation confirmed, to only ever produce mistralai_models ones.
+    texts = [
+        output.text
+        for output in outputs
+        if isinstance(output, mistralai_models.TextChunk)
+    ]
     answer = "\n".join(texts)
     if not answer.strip():
         raise ValueError("Empty answer from answer generation agent")
