@@ -20,6 +20,13 @@ SYNONYMS_PATH = Path(__file__).parent / "synonyms.txt"
 # model has separate (workable) headroom.
 MODEL = "ministral-3b-2512"
 
+# Remote agent reused across runs instead of recreated each time — same
+# rationale as rag_qa_agent/activities.py's SEARCH_AGENT_ID (see that file
+# and notes-concepts.md): without a fixed id, every Agent(...) call below
+# creates a NEW remote agent, and conversation isolation between concurrent
+# users is unaffected since it happens at the conversation level, not here.
+ANSWER_AGENT_ID = "ag_01a11687e3047512a0d5c5ce97d70bd2"
+
 
 @workflows.activity()
 async def check_forbidden_topic(question: str) -> ForbiddenTopicCheck:
@@ -128,6 +135,7 @@ async def generate_answer(question: str, context: str, synonyms: str) -> str:
     from mistralai.client import models as mistralai_models
 
     agent = workflows_mistralai.Agent(
+        id=ANSWER_AGENT_ID,
         model=MODEL,
         name="answer-agent",
         description="Answers the user's question using the retrieved context.",

@@ -20,6 +20,16 @@ from .static_prompts import SEARCH_AGENT_INSTRUCTIONS
 # history; set the real secret in .env under this name once available.
 SEARCH_MCP_AUTH_TOKEN_ENV = "SEARCH_MCP_TOKEN"
 
+# Remote agent reused across runs instead of recreated each time: without a
+# fixed id, every Agent(...) call below creates a NEW remote agent (confirmed
+# via docs.mistral.ai/studio/workflows/building-workflows/durable_agents —
+# "a new remote agent will be created on every workflow execution" — and by
+# ~10 accumulated "search-agent" entries observed on the account). Safe to
+# share across concurrent users: isolation happens at the conversation level
+# (a fresh conversation_id per run), not the agent level — see
+# notes-concepts.md.
+SEARCH_AGENT_ID = "ag_01a0fc9793a170379576dd2ba24c9138"
+
 
 @workflows.activity()
 async def get_search_mcp_url() -> str:
@@ -55,6 +65,7 @@ async def search_via_agent(keywords: str, search_mcp_url: str) -> str:
         auth_token_env=SEARCH_MCP_AUTH_TOKEN_ENV,
     )
     agent = workflows_mistralai.Agent(
+        id=SEARCH_AGENT_ID,
         model=MODEL,
         name="search-agent",
         description="Finds and reads the documents relevant to a set of search keywords.",
