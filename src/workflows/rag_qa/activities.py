@@ -118,7 +118,12 @@ async def identify_synonyms(question: str, context: str) -> str:
     return "\n".join(matched_lines)
 
 
-async def generate_answer(question: str, context: str, synonyms: str) -> str:
+async def generate_answer(
+    question: str,
+    context: str,
+    synonyms: str,
+    session: workflows_mistralai.RemoteSession | None = None,
+) -> str:
     """Produce the final answer, streamed live to the chat as tokens arrive.
 
     Plain function, not @workflows.activity(): called directly from the
@@ -126,13 +131,23 @@ async def generate_answer(question: str, context: str, synonyms: str) -> str:
     already schedules its own durable calls internally. Using
     RemoteSession(stream=True) makes Vibe display tokens live with no extra
     code (see assist-workflows guide, "Streaming Agent Responses").
+
+    Pass a `session` owned and reused by the caller (e.g. held for the
+    lifetime of a multi-turn chat workflow) to give the answer agent memory
+    of previous questions/answers — same reused-session mechanism as
+    rag_qa_agent's search_via_agent. Omit it (default) for one-shot usage.
     """
-    # Imported here, not at module level: mistralai.client.models transitively
-    # imports httpx, which subclasses urllib.request.Request at import time —
-    # the workflow sandbox restricts that when this module is pulled in
-    # transitively via workflow.py's `from .activities import ...` (same
-    # issue as this file's own httpx import above; see notes-concepts.md).
-    from mistralai.client import models as mistralai_models
+    # mistralai.client.models transitively imports httpx, which subclasses
+    # urllib.request.Request at import time. Deferring the import to inside
+    # the function (rather than module level) isn't enough on its own:
+    # generate_answer runs directly in the workflow body (see this
+    # function's docstring), so this import still executes inside the
+    # determinism sandbox at call time — explicit imports_passed_through()
+    # is required, same defensive pattern the SDK itself uses internally for
+    # deferred imports of its own modules (see
+    # mistralai.workflows.core.temporal.context_handler_interceptor).
+    with workflows.workflow.unsafe.imports_passed_through():
+        from mistralai.client import models as mistralai_models
 
     agent = workflows_mistralai.Agent(
         id=ANSWER_AGENT_ID,
@@ -149,7 +164,7 @@ async def generate_answer(question: str, context: str, synonyms: str) -> str:
     outputs = await workflows_mistralai.Runner.run(
         agent=agent,
         inputs=prompt,
-        session=workflows_mistralai.RemoteSession(stream=True),
+        session=session or workflows_mistralai.RemoteSession(stream=True),
     )
     # A reply can span several chunks (e.g. text mixed with other content
     # types); keep only the text ones and join them. Must be

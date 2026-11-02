@@ -49,14 +49,32 @@ async def get_search_mcp_url() -> str:
     )
 
 
-async def search_via_agent(keywords: str, search_mcp_url: str) -> str:
-    """Run a durable agent with MCP `search`/`readDoc` tools to gather context."""
-    # Imported here, not at module level: mistralai.client.models transitively
-    # imports httpx, which subclasses urllib.request.Request at import time —
-    # the workflow sandbox restricts that when this module is pulled in
-    # transitively via workflow.py's `from .activities import ...` (same
-    # issue as rag_qa/activities.py's httpx import; see notes-concepts.md).
-    from mistralai.client import models as mistralai_models
+async def search_via_agent(
+    keywords: str,
+    search_mcp_url: str,
+    session: workflows_mistralai.RemoteSession | None = None,
+) -> str:
+    """Run a durable agent with MCP `search`/`readDoc` tools to gather context.
+
+    Pass a `session` owned and reused by the caller (e.g. held for the
+    lifetime of a multi-turn chat workflow) to give the search agent memory
+    of its previous searches: Runner.run() checks
+    `session.is_conversation_active()` and appends to the existing remote
+    conversation instead of starting a new one when the same instance comes
+    back in. Omit it (default) for one-shot usage — a fresh RemoteSession()
+    is created internally, exactly as before.
+    """
+    # mistralai.client.models transitively imports httpx, which subclasses
+    # urllib.request.Request at import time. Deferring the import to inside
+    # the function (rather than module level) isn't enough on its own:
+    # search_via_agent runs directly in the workflow body (see this
+    # function's docstring), so this import still executes inside the
+    # determinism sandbox at call time — explicit imports_passed_through()
+    # is required, same defensive pattern the SDK itself uses internally for
+    # deferred imports of its own modules (see
+    # mistralai.workflows.core.temporal.context_handler_interceptor).
+    with workflows.workflow.unsafe.imports_passed_through():
+        from mistralai.client import models as mistralai_models
 
     mcp_config = workflows_mistralai.MCPStreamableHTTPConfig(
         url=search_mcp_url,
@@ -75,7 +93,7 @@ async def search_via_agent(keywords: str, search_mcp_url: str) -> str:
     outputs = await workflows_mistralai.Runner.run(
         agent=agent,
         inputs="keywords to search : " + keywords,
-        session=workflows_mistralai.RemoteSession(),
+        session=session or workflows_mistralai.RemoteSession(),
         # Needs at least 3 rounds (search, readDoc, final synthesis);
         # max_turns=2 was confirmed (empirically) to cut the agent off
         # before it could write its answer, returning an empty string.
